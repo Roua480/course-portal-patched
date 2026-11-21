@@ -1,5 +1,6 @@
 """Central, default-deny RBAC followed by object/context ABAC."""
 import secrets
+from ipaddress import ip_address, ip_network
 from datetime import timedelta
 from flask import abort, current_app, g, request, session
 from flask_login import current_user
@@ -48,7 +49,7 @@ def grade(user, obj, ctx):
 
 def change_grade(user, obj, ctx):
     return (obj is not None and obj.course_id in user.teaches and obj.released
-            and utcnow() < obj.course.grade_deadline)
+            and utcnow() < obj.course.grade_deadline and ctx.get("network") == "campus")
 
 
 def view_gradebook(user, obj, ctx):
@@ -101,6 +102,16 @@ def deny(status, reason):
     abort(status)
 
 
+def request_context():
+    # Direct peer address only. No ProxyFix and no trust in client proxy headers.
+    try:
+        peer = ip_address(request.remote_addr or "")
+        campus = any(peer in net for net in (ip_network("10.0.0.0/8"), ip_network("127.0.0.0/8")))
+    except ValueError:
+        campus = False
+    return {"network": "campus" if campus else "external"}
+
+
 def install(app):
     public = {"auth.login", "auth.forgot", "auth.reset", "static", "robots"}
     signed_in = {"auth.logout", "auth.inbox", "courses.dashboard", "api.me", "api.set_email"}
@@ -147,6 +158,6 @@ def install(app):
             g.policy_object = load(**request.view_args) if load else None
         except HTTPException as error:
             deny(error.code, "object unavailable")
-        if not can(current_user, perm, g.policy_object, {}):
+        if not can(current_user, perm, g.policy_object, request_context()):
             deny(404 if perm in {"view_submission", "view_grade"} else 403, "object condition")
 

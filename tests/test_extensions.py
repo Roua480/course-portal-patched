@@ -41,3 +41,36 @@ def test_n2_approval_cannot_exceed_three_days(world):
     assignment.deadline = utcnow() - timedelta(days=3, seconds=1)
     approve(world, assignment)
     assert not can(world["lina"], "submit", assignment)
+
+
+from conftest import login
+from portal.models import Submission
+
+
+def test_n3_campus_instructor_can_change_released_grade(client):
+    login(client, "dr_haddad")
+    response = client.post("/submissions/1/change/confirm",
+                           data={"grade": "A-", "confirmed": "true"},
+                           environ_overrides={"REMOTE_ADDR": "10.1.2.3"})
+    assert response.status_code == 200
+    assert db.session.get(Submission, 1).grade == "A-"
+
+
+def test_n3_external_instructor_is_denied(client):
+    login(client, "dr_haddad")
+    response = client.post("/submissions/1/change/confirm",
+                           data={"grade": "A+", "confirmed": "true"},
+                           environ_overrides={"REMOTE_ADDR": "198.51.100.9"})
+    assert response.status_code == 403
+    assert db.session.get(Submission, 1).grade == "B"
+
+
+def test_n3_forged_campus_headers_do_not_bypass_external_denial(client):
+    login(client, "dr_haddad")
+    response = client.post("/submissions/1/change/confirm",
+                           data={"grade": "A+", "confirmed": "true"},
+                           environ_overrides={"REMOTE_ADDR": "198.51.100.9"},
+                           headers={"X-Forwarded-For": "127.0.0.1", "X-Network": "campus",
+                                    "Forwarded": "for=10.1.2.3", "X-Real-IP": "10.1.2.3"})
+    assert response.status_code == 403
+    assert db.session.get(Submission, 1).grade == "B"
