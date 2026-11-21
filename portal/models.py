@@ -76,6 +76,18 @@ class Assignment(db.Model):
     course = db.relationship("Course")
 
 
+class AssignmentExtension(db.Model):
+    """Presence records staff approval, scoped to one student and assignment.
+
+    Manage approvals server-side; students cannot grant their own extensions.
+    The policy caps every approval at three days past the assignment deadline.
+    """
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
+    assignment_id = db.Column(db.Integer, db.ForeignKey("assignment.id"), primary_key=True)
+    approved_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    approved_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 class Submission(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     assignment_id = db.Column(db.Integer, db.ForeignKey("assignment.id"), nullable=False)

@@ -1,9 +1,10 @@
 """Central, default-deny RBAC followed by object/context ABAC."""
 import secrets
+from datetime import timedelta
 from flask import abort, current_app, g, request, session
 from flask_login import current_user
 from werkzeug.exceptions import HTTPException
-from .models import utcnow
+from .models import AssignmentExtension, db, utcnow
 
 ROLE_PERMISSIONS = {
     "student": {"view_material", "submit", "view_grade", "view_submission"},
@@ -20,8 +21,13 @@ def view_material(user, obj, ctx):
 
 
 def submit(user, obj, ctx):
-    return (obj is not None and obj.course_id in user.enrolled_in
-            and utcnow() < obj.deadline)
+    if obj is None or obj.course_id not in user.enrolled_in:
+        return False
+    deadline = obj.deadline
+    approval = db.session.get(AssignmentExtension, (user.id, obj.id))
+    if approval is not None:
+        deadline += timedelta(days=3)
+    return utcnow() < deadline
 
 
 def view_grade(user, obj, ctx):
