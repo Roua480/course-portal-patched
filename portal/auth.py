@@ -17,7 +17,6 @@ def login():
         if user and user.check_password(request.form.get("password", "")):
             login_user(user)
             resp = redirect("/")
-            resp.set_cookie("role", user.role)  # pages read the role from here
             return resp
         error = "Invalid username or password."
     return render_template("login.html", error=error), (401 if error else 200)

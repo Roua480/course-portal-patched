@@ -37,6 +37,9 @@ def create_app(test_config=None):
     def robots():
         return Response("User-agent: *\nDisallow: /registrar-x9k2\n", mimetype="text/plain")
 
+    from .policy import install
+    install(app)
+
     with app.app_context():
         db.create_all()
         if not app.config.get("TESTING") and User.query.first() is None:

@@ -4,6 +4,8 @@
 <h1>Submission {{ sub.id }}</h1>
 <p>{{ sub.assignment.title }} ({{ sub.course.code }}), by {{ sub.student.username }}</p>
 <p>{{ sub.body }}</p>
+{% if show_grade %}
 <p>Grade: {{ sub.grade or "not graded" }}</p>
 <p>Feedback: {{ sub.feedback }}</p>
+{% endif %}
 {% endblock %}
