@@ -1,0 +1,269 @@
+PART 4 - FIX THE COURSE PORTAL
+Report text and evidence checklist
+Repository: https://github.com/Roua480/course-portal-patched
+
+Use the implementation discussion below in your report. Add your own Burp captures
+where indicated. Automated test evidence is complete; browser/Burp screenshots
+have not been captured by the assistant and must not be described as completed.
+
+1. ACCESS CONTROL MODEL (steps 18-20)
+
+I implemented a central, default-deny policy in portal/policy.py. RBAC first checks
+whether the user's database role holds the requested permission. ABAC then checks
+the relevant object, ownership, course relationships, state, deadlines and request
+context. Unknown roles and undefined permissions are denied. Client-controlled
+role cookies and Referer values are never used as authorization facts.
+
+The global before_request hook protects the application. Public endpoints are
+login, forgot-password, reset-password, robots.txt and static files. Dashboard,
+inbox, logout and /api/me explicitly declare an authentication-only rule. Other
+routes declare their permission and object loader using @requires(...).
+A newly added route without a rule is denied. Anonymous protected requests receive
+401, unauthorized actions receive 403, and inaccessible submissions receive 404.
+Denials are logged server-side; the response gives no policy details.
+
+The role check happens before object loading. Otherwise, a role that cannot use
+an action could distinguish real IDs from nonexistent IDs by comparing responses.
+For submission reads, both another student's record and a nonexistent record
+produce 404. This hides the existence of private submissions and their feedback.
+
+The complete policy table is:
+
+Permission          RBAC roles             ABAC condition
+view_material       student, TA, instructor Course enrolled in or staffed by user
+submit              student                Enrolled; before deadline, plus at most
+                                           3 days with a stored approved extension
+view_grade          student                Own submission and released
+create_assignment   instructor             Course in teaches
+ grade              TA, instructor         Course in staff_of; not released;
+                                           TA must not be enrolled in that course
+change_grade        instructor             Course in teaches; released; before
+                                           grade deadline; campus network
+ enroll             registrar              No additional condition
+view_gradebook      TA, instructor, chair  Staff course; for chair, same department
+release_grades      instructor             Course in teaches
+manage_roles        registrar              No additional condition
+assign_staff        registrar              No additional condition
+
+Two supporting permissions separate data access from grade disclosure:
+view_submission: student/TA/instructor, own submission or staff course. Students
+can open their own unreleased work, but grade and feedback stay hidden until
+view_grade permits disclosure. Authorized course staff can see grading details.
+edit_email: every recognized role, but only its own authenticated user ID. The
+view always updates current_user; the URL cannot select a different account.
+
+Updated can() (the actual function is in portal/policy.py):
+
+    def can(user, perm, obj=None, ctx=None):
+        if not user or not user.is_authenticated:
+            return False
+        if perm not in ROLE_PERMISSIONS.get(user.role, set()):
+            return False
+        condition = CONDITIONS.get(perm)
+        return bool(condition and condition(user, obj, ctx or {}))
+
+Diagram: include PART4_POLICY.svg in the report. Its arrows show each role's
+permissions followed by the relevant ABAC conditions. A request must pass both.
+
+2. WHAT CHANGED FOR THE SEVEN ATTACKS (step 21)
+
+Attack 1 - hidden registrar console:
+Originally, the console had no student link and an obscure path; login was its
+only real barrier. Knowing the path bypassed the obscurity. Registrar-only
+manage_roles now protects the console and role update. Enrollment has its own
+registrar-only permission. Role input must name a defined role.
+
+Attack 2 - role cookie:
+The gradebook originally trusted the role cookie written at login. The browser
+could replace it, including in an otherwise anonymous request. The server now
+uses the authenticated user's database role and course relationship. Login no
+longer writes an authorization role cookie; forged old cookies are ignored.
+
+Attack 3 - method bypass:
+The release endpoint originally accepted GET and POST, while the staff hook
+checked only POST. Release now accepts POST only, requires release_grades for
+that instructor's course, and requires a CSRF token. GET cannot change grades.
+
+Attack 4 - submission IDOR:
+Originally, the view checked login but not the owner, course or release state.
+The model now checks submission ownership or authorized course staffing. Another
+student's submission returns 404. Unreleased grades and feedback are hidden from
+students even when they can read their own submitted work.
+
+Attack 5 - instructor account takeover:
+Originally, the caller selected the account through the URL ID. The email edit
+permission now restricts the ID to the signed-in user and the view updates only
+current_user. A case-insensitive duplicate email check returns 409 if another
+account owns the address. Lina cannot redirect the instructor's reset email.
+The existing reset token is already random, expiring and single-use: replaying a
+used link fails. The original takeover exploited email authorization, not a weak
+reset token. This change does not redesign the unrelated Meridian application.
+
+Attack 6 - skipping the first grade-change step:
+Originally, confirmation assumed step 1 had authorized the caller. It checked
+only confirmed=true. Both steps now independently require change_grade, including
+instructor ownership of the course, released state, grade deadline and campus
+network. Confirmation also needs the session's CSRF token. Hiding the button or
+forcing navigation order is not the security boundary.
+
+Attack 7 - forged Referer:
+Originally, adding a TA trusted a Referer ending in /registrar. The client can
+write that header. The route now declares registrar-only assign_staff and loads
+the course after checking the role. The Referer grants no permission.
+
+3. CSRF AND COOKIE DESIGN (step 22)
+
+Successful login clears the previous session and generates a new unpredictable
+32-byte token using secrets.token_urlsafe(32). The token is stored under
+session['csrf_token']. A pre-login token cannot authorize a post-login change.
+Every portal form contains a hidden csrf_token field, and base.html carries
+<meta name="csrf-token" ...> for scripts. The global hook validates unsafe
+methods against the session token from the form or X-CSRF-Token header using
+secrets.compare_digest. A missing, incorrect or other-session token receives 403.
+Logout is POST-only and also requires a token.
+
+Compatibility detail: the supplied tests send login/forgot requests without first
+opening a page. The implementation permits a first-contact anonymous public
+login/forgot/reset POST only when no login or CSRF session exists. If Origin or
+Referer identifies another origin, or Sec-Fetch-Site says cross-site, this initial
+request is refused. After a token/session exists, public POST forms require it
+as well. Normal browser use starts with GET and sends the embedded token.
+This initial anonymous bootstrap is an explicit exception to blanket token
+validation; authenticated state changes have no such exception.
+
+HttpOnly and SameSite=Lax are enabled and work on the HTTP lab server. Secure is
+left false for this HTTP lab; it must be enabled for HTTPS deployment. HttpOnly
+prevents JavaScript reading the session cookie; it does not stop CSRF.
+
+Step 16 is stopped by CSRF token validation: the hostile page cannot read the
+portal's session token because the origins differ. Its auto-submitted grade POST
+is refused even though the browser sends a valid session cookie.
+Step 17 is stopped by removing state changes from GET. The attack's link now
+receives 405 for a signed-in instructor and cannot release grades. A legitimate
+release POST needs both authorization and a CSRF token.
+
+The portal at http://127.0.0.1:5002 and attacker at http://127.0.0.1:8000 have
+different origins because the ports differ, but are the same site. SameSite=Lax
+therefore does not stop the lab's same-site POST attack. It also permits cookies
+on top-level safe navigations such as GET, which is why changing state through a
+link was unsafe. The same-origin policy prevents reading the response, but does
+not undo a state change already caused by sending the request.
+
+4. N1-N4: UPDATED MODEL AND TWELVE REQUIRED TESTS (steps 25-28)
+
+N1 - chair reads department grades:
+RBAC grants chair view_gradebook, with no grade-writing permissions. ABAC limits
+the course department to the chair's department. Being a chair describes the role;
+department equality describes the relationship to the object.
+Tests: same-department read allowed; other-department read denied; released-grade
+change denied. See test_n1_* in tests/test_extensions.py.
+
+N2 - approved three-day extension:
+RBAC keeps submit restricted to students. ABAC requires enrollment and a deadline
+check, adding three days only when a stored approval exists for that exact
+student/assignment pair. AssignmentExtension stores user_id, assignment_id,
+approved_by_id and approved_at. Presence records staff approval. Students have no
+endpoint to create these records. Approvals are maintained by trusted staff via
+server-side database tooling; an approval UI is outside this lab implementation.
+The server clock is used, and the deadline is exclusive: at or beyond the cutoff,
+submission is refused. Existing databases get the new table at startup.
+Tests: approved submission two days late allowed; late without approval denied;
+approved submission more than three days late denied. See test_n2_*.
+
+Example approval using Flask shell (trusted local administrator only):
+    python -m flask --app portal shell
+    from portal.models import AssignmentExtension, db
+    db.session.add(AssignmentExtension(user_id=6, assignment_id=3, approved_by_id=2))
+    db.session.commit()
+Do not add this seed approval before collecting the original late-submission
+refusal. Reset removes approvals along with the other lab data.
+
+N3 - campus-only released-grade changes:
+RBAC requires instructor. ABAC requires teaching the course, a released grade,
+a valid grade deadline and ctx['network']=='campus'. The hook derives network
+from request.remote_addr, the socket peer, accepting only 10.0.0.0/8 and
+127.0.0.0/8. It ignores X-Forwarded-For, Forwarded, X-Real-IP and X-Network.
+No ProxyFix is installed. In this direct-server lab, the HTTP caller cannot change
+the actual peer address by editing a header. Behind a reverse proxy this design
+would need explicit trusted-proxy configuration; arbitrary headers must never
+be trusted. Missing/invalid network data fails closed.
+Tests: 10.1.2.3 instructor confirmation allowed; 198.51.100.9 denied; same external
+address with forged campus/proxy headers denied. See test_n3_*; each checks the
+stored grade. Flask tests inject REMOTE_ADDR because run.py binds to loopback.
+
+N4 - TA conflict of interest:
+RBAC permits TA and instructor to grade. ABAC rejects a TA whenever the course
+also appears in enrolled_in, even when the submission belongs to another student.
+This applies to the whole course, not just the TA's own work. Enrollment is an
+object relationship, so this restriction belongs in ABAC rather than a new role.
+Tests: unenrolled Omar grading course 1 allowed; Rana grading her own course 2
+submission denied; Rana grading another student's course 2 submission denied.
+See test_n4_*.
+
+All four changes live in the policy/model; none adds a new authorization if in
+a route view. The twelve extension tests are supplemented by route-level checks.
+
+5. TEST EVIDENCE (step 23 and final suite)
+
+Baseline, before changes:
+    python -m pytest -q
+    25 failed, 16 passed, 2 warnings in 6.38s
+
+Final output is saved verbatim in PART4_TEST_RESULTS.txt. All 41 original tests
+pass, alongside the twelve extension cases and additional integration tests.
+The original tests and fixtures were not edited. Test fixtures rebuild isolated
+seed data per test, including all seven access-control attacks and both CSRF
+attacks. Assertions check refusals and prevent unauthorized data changes.
+Additional tests cover legitimate grade/release/submit flows, token rotation,
+email uniqueness, unreleased feedback, both grade-change deadlines, route
+coverage, logs, and the new requirements through actual Flask requests.
+
+6. BURP EVIDENCE TO ADD YOURSELF (step 24)
+
+These are expected results backed by automated tests, not claims that Burp
+screenshots have already been collected. Capture the request and response for
+each numbered item. For access-control replays, send the correct session CSRF
+token so a CSRF refusal does not mask a missing permission check.
+
+Preparation:
+- Stop/restart python run.py after code edits.
+- Run python run.py --reset, then python run.py.
+- Sign in again; old session tokens must not be reused.
+- Read the token from a portal page's csrf-token meta tag or a form hidden field.
+- In Burp Repeater use the matching Cookie: session=... and
+  X-CSRF-Token: <that session's token> for authorized POST/PUT requests.
+- Reset/re-login between attacks when a clean seed state is needed.
+
+Evidence 1 (step 6): Lina POST /registrar-x9k2/role with username=lina and
+role=instructor -> 403. GET /api/me still says student.
+Evidence 2 (step 7): Lina GET /gradebook/1 with role=ta cookie -> 403. With no
+session cookie, even role=instructor -> 401.
+Evidence 3 (step 8): Lina GET /staff/release/1 -> 405; grades remain unreleased.
+Her POST with valid token -> 403.
+Evidence 4 (step 9): Lina GET /submissions/3 -> 404 with no feedback. A nonexistent
+submission ID also gives 404. Her own /submissions/1 -> 200.
+Evidence 5 (steps 10-12): Lina PUT /api/users/2/email with valid token and
+{"email":"lina@portal.lab"} -> 403. Instructor email remains unchanged, so his
+reset message is not delivered to Lina's inbox. Do not claim the takeover worked.
+Evidence 6 (step 13): Lina POST /submissions/1/change/confirm with valid token,
+grade=A+ and confirmed=true -> 403. The released grade remains B.
+Evidence 7 (step 14): Lina POST /courses/2/staff/add with a valid token,
+username=lina and forged Referer: http://127.0.0.1:5002/registrar -> 403.
+GET /courses/2/materials remains 403.
+Evidence 8 (step 16): Sign in as dr_haddad. Serve the original grade.html on
+127.0.0.1:8000; open it through Burp. The forged grade POST without a token -> 403.
+Gradebook shows no forged A+ change.
+Evidence 9 (step 17): As dr_haddad, click the original release.html attack link.
+GET /staff/release/1 -> 405. Gradebook still shows the open submission unreleased.
+
+Legitimate comparison evidence:
+- Lina GET /courses/1/materials and /submissions/1 -> 200.
+- dr_haddad POST /submissions/2/grade, grade=B+, valid session token -> 200.
+- Repeat the SAME grade request without token -> 403; stored grade unchanged.
+- dr_haddad POST /staff/release/1 with valid token -> 200 and gradebook released.
+- Save a screenshot of the final pytest command output.
+- Include the twelve N1-N4 test names/results and the policy diagram/table above.
+
+Suggested screenshot captions describe the actual captured result, for example:
+"The forged role cookie is ignored: Lina's gradebook request returns HTTP 403."
+Do not replace these pending captures with screenshots of the automated tests.
