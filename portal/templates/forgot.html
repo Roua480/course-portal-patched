@@ -6,6 +6,7 @@
 <p>If that account exists, we sent a reset link to its e-mail address.</p>
 {% else %}
 <form method="post">
+  <input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}">
   <label>Username <input name="username" autofocus></label>
   <button type="submit">Send reset link</button>
 </form>

@@ -1,7 +1,7 @@
 import secrets
 from datetime import timedelta
 
-from flask import Blueprint, redirect, render_template, request
+from flask import Blueprint, redirect, render_template, request, session
 from flask_login import current_user, login_required, login_user, logout_user
 
 from .models import Mail, ResetToken, User, db, utcnow
@@ -15,16 +15,19 @@ def login():
     if request.method == "POST":
         user = User.query.filter_by(username=request.form.get("username", "")).first()
         if user and user.check_password(request.form.get("password", "")):
+            session.clear()
             login_user(user)
+            session["csrf_token"] = secrets.token_urlsafe(32)
             resp = redirect("/")
             return resp
         error = "Invalid username or password."
     return render_template("login.html", error=error), (401 if error else 200)
 
 
-@bp.get("/logout")
+@bp.post("/logout")
 def logout():
     logout_user()
+    session.clear()
     resp = redirect("/login")
     resp.delete_cookie("role")
     return resp

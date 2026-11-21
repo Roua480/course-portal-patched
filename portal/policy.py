@@ -1,5 +1,6 @@
 """Central, default-deny RBAC followed by object/context ABAC."""
-from flask import abort, current_app, g, request
+import secrets
+from flask import abort, current_app, g, request, session
 from flask_login import current_user
 from werkzeug.exceptions import HTTPException
 from .models import utcnow
@@ -104,10 +105,23 @@ def install(app):
 
     @app.before_request
     def authorize():
-        if request.endpoint in public:
-            return
-        if not current_user.is_authenticated:
+        is_public = request.endpoint in public
+        if not is_public and not current_user.is_authenticated:
             deny(401, "authentication required")
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            expected = session.get("csrf_token")
+            supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
+            # First-contact anonymous auth requests have no existing session to exploit.
+            # Once a session/token exists, public forms must validate it as well.
+            bootstrap = (is_public and not session.get("_user_id") and expected is None
+                         and request.endpoint in {"auth.login", "auth.forgot", "auth.reset"})
+            if not bootstrap and not (isinstance(expected, str) and isinstance(supplied, str)
+                                      and secrets.compare_digest(expected.encode(), supplied.encode())):
+                deny(403, "CSRF token")
+        if "csrf_token" not in session:
+            session["csrf_token"] = secrets.token_urlsafe(32)
+        if is_public:
+            return
         if request.routing_exception is not None:
             deny(request.routing_exception.code, "unavailable route or method")
         if request.endpoint in signed_in:
@@ -126,3 +140,4 @@ def install(app):
             deny(error.code, "object unavailable")
         if not can(current_user, perm, g.policy_object, {}):
             deny(404 if perm in {"view_submission", "view_grade"} else 403, "object condition")
+

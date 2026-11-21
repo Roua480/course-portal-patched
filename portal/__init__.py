@@ -13,6 +13,10 @@ def create_app(test_config=None):
         app.instance_path, "portal.db")
     if os.environ.get("PORTAL_DB"):  # tooling hook: an explicit SQLite file path
         app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.environ["PORTAL_DB"]
+    # HttpOnly and SameSite=Lax work over this HTTP lab server.
+    # Secure requires HTTPS; enable it when serving behind HTTPS in deployment.
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                      SESSION_COOKIE_SECURE=False)
     if test_config:
         app.config.update(test_config)
     os.makedirs(app.instance_path, exist_ok=True)
