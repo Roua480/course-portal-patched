@@ -11,6 +11,7 @@ ROLE_PERMISSIONS = {
     "instructor": {"view_material", "create_assignment", "grade", "change_grade",
                    "view_gradebook", "release_grades", "view_submission"},
     "registrar": {"enroll", "manage_roles", "assign_staff"},
+    "chair": {"view_gradebook"},
 }
 
 
@@ -45,6 +46,8 @@ def change_grade(user, obj, ctx):
 
 
 def view_gradebook(user, obj, ctx):
+    if user.role == "chair":
+        return obj is not None and obj.department == user.department
     return obj is not None and obj.id in user.staff_of
 
 
