@@ -10,6 +10,7 @@ bp = Blueprint("courses", __name__)
 
 @bp.get("/")
 @login_required
+@requires("authenticated")
 def dashboard():
     ids = current_user.enrolled_in | current_user.staff_of
     courses = Course.query.filter(Course.id.in_(ids)).all() if ids else []
@@ -27,7 +28,6 @@ def materials(cid):
 @login_required
 @requires("submit", lambda aid: db.get_or_404(Assignment, aid))
 def submit(aid):
-    assignment = g.policy_object
     sub = Submission.query.filter_by(assignment_id=aid, student_id=current_user.id).first()
     if sub is None:
         sub = Submission(assignment_id=aid, student_id=current_user.id)

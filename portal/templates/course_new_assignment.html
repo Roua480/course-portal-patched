@@ -4,7 +4,8 @@
 <h1>New assignment</h1>
 <form method="post" action="/staff/assignments/new">
   <input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}">
-  <input name="course_id" placeholder="course id">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  <p>Course: {{ course.code }}</p>
   <input name="title" placeholder="title">
   <input name="deadline" placeholder="2026-12-31T23:59">
   <button type="submit">Create</button>

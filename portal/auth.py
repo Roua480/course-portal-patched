@@ -5,6 +5,7 @@ from flask import Blueprint, redirect, render_template, request, session
 from flask_login import current_user, login_required, login_user, logout_user
 
 from .models import Mail, ResetToken, User, db, utcnow
+from .policy import requires
 
 bp = Blueprint("auth", __name__)
 
@@ -25,6 +26,7 @@ def login():
 
 
 @bp.post("/logout")
+@requires("authenticated")
 def logout():
     logout_user()
     session.clear()
@@ -72,6 +74,7 @@ def reset():
 
 @bp.get("/inbox")
 @login_required
+@requires("authenticated")
 def inbox():
     mails = (Mail.query.filter_by(to_address=current_user.email)
              .order_by(Mail.sent_at.desc(), Mail.id.desc()).all())

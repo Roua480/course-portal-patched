@@ -2,6 +2,7 @@
 import secrets
 from ipaddress import ip_address, ip_network
 from datetime import timedelta
+from urllib.parse import urlsplit
 from flask import abort, current_app, g, request, session
 from flask_login import current_user
 from werkzeug.exceptions import HTTPException
@@ -15,6 +16,14 @@ ROLE_PERMISSIONS = {
     "registrar": {"enroll", "manage_roles", "assign_staff"},
     "chair": {"view_gradebook"},
 }
+
+# Account maintenance is available to each recognized role, on its own identity only.
+for permissions in ROLE_PERMISSIONS.values():
+    permissions.add("edit_email")
+
+
+def edit_email(user, obj, ctx):
+    return obj == user.id
 
 
 def view_material(user, obj, ctx):
@@ -77,7 +86,7 @@ def assign_staff(user, obj, ctx):
 
 CONDITIONS = {f.__name__: f for f in (
     view_material, submit, view_grade, view_submission, create_assignment, grade,
-    change_grade, view_gradebook, release_grades, enroll, manage_roles, assign_staff)}
+    change_grade, view_gradebook, release_grades, enroll, manage_roles, assign_staff, edit_email)}
 
 
 def can(user, perm, obj=None, ctx=None):
@@ -115,7 +124,6 @@ def request_context():
 
 def install(app):
     public = {"auth.login", "auth.forgot", "auth.reset", "static", "robots"}
-    signed_in = {"auth.logout", "auth.inbox", "courses.dashboard", "api.me", "api.set_email"}
 
     @app.errorhandler(401)
     @app.errorhandler(403)
@@ -136,6 +144,14 @@ def install(app):
             # Once a session/token exists, public forms must validate it as well.
             bootstrap = (is_public and not session.get("_user_id") and expected is None
                          and request.endpoint in {"auth.login", "auth.forgot", "auth.reset"})
+            if bootstrap:
+                origin = request.headers.get("Origin")
+                referer = request.headers.get("Referer")
+                source = urlsplit(origin or referer or request.host_url)
+                target = urlsplit(request.host_url)
+                if ((source.scheme, source.netloc) != (target.scheme, target.netloc)
+                        or request.headers.get("Sec-Fetch-Site") == "cross-site"):
+                    deny(403, "cross-origin authentication bootstrap")
             if not bootstrap and not (isinstance(expected, str) and isinstance(supplied, str)
                                       and secrets.compare_digest(expected.encode(), supplied.encode())):
                 deny(403, "CSRF token")
@@ -145,13 +161,13 @@ def install(app):
             return
         if request.routing_exception is not None:
             deny(request.routing_exception.code, "unavailable route or method")
-        if request.endpoint in signed_in:
-            return
         view = app.view_functions.get(request.endpoint)
         rule = getattr(view, "portal_rule", None)
         if rule is None:
             deny(403, "missing rule")
         perm, load = rule
+        if perm == "authenticated":
+            return
         # Reject roles before loading IDs, so they cannot probe object existence.
         if perm not in ROLE_PERMISSIONS.get(current_user.role, set()) or perm not in CONDITIONS:
             deny(403, "role permission")

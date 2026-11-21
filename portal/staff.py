@@ -2,7 +2,7 @@ from markupsafe import escape
 from datetime import datetime
 
 from flask import Blueprint, abort, g, render_template, request
-from flask_login import current_user, login_required
+from flask_login import login_required
 
 from .models import Assignment, Course, CourseTA, Enrollment, Submission, User, db
 from .policy import requires, ROLE_PERMISSIONS
@@ -24,7 +24,7 @@ def release(cid):
 @bp.get("/staff/assignments/new")
 @requires("create_assignment", lambda: db.get_or_404(Course, request.args.get("course_id", type=int)))
 def new_assignment_form():
-    return render_template("course_new_assignment.html")
+    return render_template("course_new_assignment.html", course=g.policy_object)
 
 
 @bp.post("/staff/assignments/new")
