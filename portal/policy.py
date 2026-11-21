@@ -44,7 +44,8 @@ def create_assignment(user, obj, ctx):
 
 
 def grade(user, obj, ctx):
-    return obj is not None and obj.course_id in user.staff_of and not obj.released
+    return (obj is not None and obj.course_id in user.staff_of and not obj.released
+            and not (user.role == "ta" and obj.course_id in user.enrolled_in))
 
 
 def change_grade(user, obj, ctx):

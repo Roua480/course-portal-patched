@@ -74,3 +74,17 @@ def test_n3_forged_campus_headers_do_not_bypass_external_denial(client):
                                     "Forwarded": "for=10.1.2.3", "X-Real-IP": "10.1.2.3"})
     assert response.status_code == 403
     assert db.session.get(Submission, 1).grade == "B"
+
+
+def test_n4_unenrolled_ta_can_grade(world):
+    assert can(world["omar_ta"], "grade", world["sub_open_215"])
+
+
+def test_n4_enrolled_ta_cannot_grade_own_submission(world):
+    assert not can(world["rana_ta"], "grade", world["sub_open_202"])
+
+
+def test_n4_enrolled_ta_cannot_grade_another_student(world):
+    other = world["sub_sami"]
+    other.released = False
+    assert not can(world["rana_ta"], "grade", other)
